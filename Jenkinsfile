@@ -11,7 +11,7 @@ pipeline {
         NEXT_FRONTEND_DIR = 'frontend'
         DB_HOST = 'localhost'
         DB_USER = 'admin'
-        DB_PASSWORD = 'admin'
+        DB_PASSWORD = credentials('db_password') // Use Jenkins credentials
         DB_NAME = 'expense_tracker'
         SERVER_HOSTNAME = 'thin.ec2.alluvium.net'
     }
@@ -28,6 +28,7 @@ pipeline {
                 dir(GO_BACKEND_DIR) {
                     sh 'go mod download'
                     sh 'go build -o app'
+                    sh 'chmod +x app'  // Ensure executable
                 }
             }
         }
@@ -59,7 +60,7 @@ pipeline {
                     sudo systemctl stop go-app.service || true
                     
                     # Copy binary and service file
-                    sudo cp app /usr/local/bin/go-app
+                    sudo cp -v app /usr/local/bin/go-app
                     
                     # Create or update systemd service
                     cat > go-app.service << EOL
@@ -77,8 +78,8 @@ Environment="PG_DBNAME=${DB_NAME}"
 ExecStart=/usr/local/bin/go-app
 Restart=always
 RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=go-app
 User=ubuntu
 
@@ -86,10 +87,18 @@ User=ubuntu
 WantedBy=multi-user.target
 EOL
                     
-                    sudo cp go-app.service /etc/systemd/system/
+                    sudo cp -v go-app.service /etc/systemd/system/
                     sudo systemctl daemon-reload
                     sudo systemctl enable go-app.service
                     sudo systemctl start go-app.service
+                    
+                    # Verify service is running
+                    sleep 5
+                    if ! sudo systemctl is-active go-app.service; then
+                        echo "WARNING: go-app.service failed to start"
+                        sudo journalctl -u go-app.service --no-pager -n 50
+                        exit 1
+                    fi
                     '''
                 }
             }
@@ -125,8 +134,8 @@ WorkingDirectory=/var/www/nextjs-app
 ExecStart=$(which npm) start
 Restart=always
 RestartSec=10
-StandardOutput=syslog
-StandardError=syslog
+StandardOutput=journal
+StandardError=journal
 SyslogIdentifier=nextjs-app
 User=ubuntu
 
@@ -134,12 +143,40 @@ User=ubuntu
 WantedBy=multi-user.target
 EOL
                     
-                    sudo cp nextjs-app.service /etc/systemd/system/
+                    sudo cp -v nextjs-app.service /etc/systemd/system/
                     sudo systemctl daemon-reload
                     sudo systemctl enable nextjs-app.service
                     sudo systemctl start nextjs-app.service
+                    
+                    # Verify service is running
+                    sleep 5
+                    if ! sudo systemctl is-active nextjs-app.service; then
+                        echo "WARNING: nextjs-app.service failed to start"
+                        sudo journalctl -u nextjs-app.service --no-pager -n 50
+                        exit 1
+                    fi
                     '''
                 }
+            }
+        }
+        
+        stage('Verify Deployment') {
+            steps {
+                sh '''
+                # Check if services are running
+                echo "Checking if services are running..."
+                sudo systemctl status go-app.service || true
+                sudo systemctl status nextjs-app.service || true
+                
+                # Check if ports are listening
+                echo "Checking if ports are open..."
+                sudo netstat -tulpn | grep 3000 || echo "Port 3000 not listening"
+                sudo netstat -tulpn | grep 3001 || echo "Port 3001 not listening"
+                
+                # Try connecting to health endpoint
+                echo "Testing backend health endpoint..."
+                curl -v http://localhost:3001/health || echo "Health endpoint not responding"
+                '''
             }
         }
     }
@@ -150,6 +187,17 @@ EOL
         }
         failure {
             echo 'Deployment failed!'
+            sh '''
+            echo "==== Diagnostics ===="
+            echo "Go app service status:"
+            sudo systemctl status go-app.service || true
+            echo "Next.js app service status:"
+            sudo systemctl status nextjs-app.service || true
+            echo "Go app logs:"
+            sudo journalctl -u go-app.service --no-pager -n 50 || true
+            echo "Next.js app logs:"
+            sudo journalctl -u nextjs-app.service --no-pager -n 50 || true
+            '''
         }
     }
 }
