@@ -87,9 +87,9 @@ func main() {
 	r.HandleFunc("/api/expenses/{id}", app.deleteExpense).Methods("DELETE")
 
 	c := cors.New(cors.Options{
-		AllowedOrigins:   []string{"http://localhost:3000", "http://54.226.1.246:3000"},
+		AllowedOrigins:   []string{"http://localhost:3000", "http://thin.ec2.alluvium.net:3000"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Content-Type"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 		AllowCredentials: true,
 	})
 
